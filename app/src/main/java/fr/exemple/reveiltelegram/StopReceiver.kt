@@ -6,6 +6,7 @@ import android.content.Intent
 
 class StopReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        AlarmPlayer.stop(context)
+        Store.log(context, "⏹ Alarme arrêtée")
+        AlarmService.arreter(context)
     }
 }
