@@ -1,74 +1,65 @@
 package fr.exemple.reveiltelegram
 
 import android.app.Notification
+import android.content.ComponentName
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
-import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Date
-import java.util.Locale
 
 class TelegramListener : NotificationListenerService() {
 
-    companion object {
-        const val HEURE_DEBUT = 22   // début de la nuit
-        const val HEURE_FIN = 8      // fin de la nuit
-
-        private val PAQUETS = setOf(
-            "org.telegram.messenger",
-            "org.telegram.messenger.web",
-            "org.telegram.messenger.beta",
-            "org.thunderdog.challegram"
-        )
-    }
-
-    private fun diag(msg: String) {
-        val h = SimpleDateFormat("HH:mm:ss", Locale.FRANCE).format(Date())
-        getSharedPreferences("reglages", MODE_PRIVATE).edit()
-            .putString("diag", "$h : $msg").apply()
-    }
-
     override fun onListenerConnected() {
-        diag("service connecté, en attente de messages…")
+        Store.log(this, "✅ Surveillance des notifications connectée")
+    }
+
+    override fun onListenerDisconnected() {
+        Store.log(this, "⚠️ Surveillance déconnectée, reconnexion…")
+        NotificationListenerService.requestRebind(
+            ComponentName(this, TelegramListener::class.java))
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         val pkg = sbn.packageName
-        if (pkg !in PAQUETS) {
-            if (pkg.contains("gram", ignoreCase = true)) diag("app inconnue : $pkg")
+        if (pkg == packageName) return
+        val n = sbn.notification ?: return
+        if ((n.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return
+        if ((n.flags and Notification.FLAG_ONGOING_EVENT) != 0) return
+        if (!Store.appActive(this)) return
+
+        val concernees = Store.regles(this).filter { pkg in it.applis }
+        if (concernees.isEmpty()) return
+
+        val ex = n.extras
+        val titre = listOfNotNull(
+            ex.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)?.toString(),
+            ex.getCharSequence(Notification.EXTRA_TITLE)?.toString()
+        ).distinct().joinToString(" · ")
+        val texte = (ex.getCharSequence(Notification.EXTRA_BIG_TEXT)
+            ?: ex.getCharSequence(Notification.EXTRA_TEXT))?.toString() ?: ""
+
+        if (AlarmService.enCours) {
+            Store.log(this, "Alarme déjà en cours (${court(titre)})")
             return
         }
 
-        val n = sbn.notification
-        if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
-
-        val prefs = getSharedPreferences("reglages", MODE_PRIVATE)
-        if (!prefs.getBoolean("actif", true)) {
-            diag("ignoré : interrupteur principal désactivé"); return
+        val p = Store.prefs(this)
+        val maintenant = System.currentTimeMillis()
+        for (r in concernees) {
+            val raison = r.raisonRefus(pkg, titre, texte)
+            if (raison != null) {
+                Store.log(this, "Ignoré par « ${r.nom} » : $raison — ${court(titre)} : ${court(texte)}")
+                continue
+            }
+            val dernier = maxOf(p.getLong("dernier_${r.id}", 0L), p.getLong("dernier_arret", 0L))
+            if (maintenant - dernier < r.pauseMin * 60_000L) {
+                Store.log(this, "« ${r.nom} » en pause anti-répétition")
+                continue
+            }
+            p.edit().putLong("dernier_${r.id}", maintenant).apply()
+            Store.log(this, "🔔 « ${r.nom} » déclenchée — ${court(titre)} : ${court(texte)}")
+            AlarmService.demarrer(this, r, titre, texte, pkg)
+            return
         }
-
-        val h = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        val nuit = h >= HEURE_DEBUT || h < HEURE_FIN
-        if (!nuit && !prefs.getBoolean("toujours", false)) {
-            diag("ignoré : on est en journée"); return
-        }
-
-        if (AlarmPlayer.isRinging) { diag("alarme déjà en cours"); return }
-        if (System.currentTimeMillis() - AlarmPlayer.lastStop < 60_000) {
-            diag("ignoré : pause d'1 min après un arrêt"); return
-        }
-
-        val titre = n.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
-        val texte = n.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
-
-        val filtre = (prefs.getString("filtre", "") ?: "").trim()
-        if (filtre.isNotEmpty() &&
-            !titre.contains(filtre, ignoreCase = true) &&
-            !texte.contains(filtre, ignoreCase = true)) {
-            diag("ignoré par le filtre (titre reçu : « $titre »)"); return
-        }
-
-        diag("🔔 ALARME déclenchée par « $titre »")
-        AlarmPlayer.start(this, "$titre : $texte")
     }
+
+    private fun court(s: String) = if (s.length > 60) s.take(60) + "…" else s
 }
