@@ -51,15 +51,15 @@ class MainActivity : Activity() {
         col.addView(statut)
 
         col.addView(CheckBox(this).apply {
-            text = "Réveil activé (22h → 8h)"
+            text = "Application activée (interrupteur principal)"
             isChecked = prefs.getBoolean("actif", true)
-            setOnCheckedChangeListener { _, b -> prefs.edit().putBoolean("actif", b).apply() }
+            setOnCheckedChangeListener { _, b -> prefs.edit().putBoolean("actif", b).apply(); maj() }
         })
 
         col.addView(CheckBox(this).apply {
-            text = "Sonner aussi en journée (pour tester)"
+            text = "Sonner 24h/24 (sinon seulement de 22h à 8h)"
             isChecked = prefs.getBoolean("toujours", false)
-            setOnCheckedChangeListener { _, b -> prefs.edit().putBoolean("toujours", b).apply() }
+            setOnCheckedChangeListener { _, b -> prefs.edit().putBoolean("toujours", b).apply(); maj() }
         })
 
         val filtre = EditText(this).apply {
@@ -87,6 +87,8 @@ class MainActivity : Activity() {
             maj()
         }
 
+        bouton("🔄 Actualiser le diagnostic") { maj() }
+
         setContentView(ScrollView(this).apply { addView(col) })
     }
 
@@ -96,11 +98,16 @@ class MainActivity : Activity() {
     }
 
     private fun maj() {
+        val prefs = getSharedPreferences("reglages", MODE_PRIVATE)
         val acces = Settings.Secure.getString(contentResolver,
             "enabled_notification_listeners")?.contains(packageName) == true
         statut.text =
             (if (acces) "✅ Accès aux notifications : OK"
              else "❌ Accès aux notifications : NON autorisé") + "\n" +
-            (if (AlarmPlayer.isRinging) "🔔 Alarme en cours" else "🔕 Alarme arrêtée")
+            (if (prefs.getBoolean("actif", true)) "✅ Application activée"
+             else "❌ Application DÉSACTIVÉE") + "\n" +
+            (if (AlarmPlayer.isRinging) "🔔 Alarme en cours" else "🔕 Alarme arrêtée") +
+            "\n\n🔎 Dernier événement :\n" +
+            (prefs.getString("diag", null) ?: "aucun (le service n'a encore rien vu)")
     }
 }
